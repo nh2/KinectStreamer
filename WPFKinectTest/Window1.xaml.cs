@@ -32,6 +32,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.ComponentModel;
+using System.Web.Script.Serialization;
 
 namespace WPFKinectTest
 {
@@ -46,6 +47,8 @@ namespace WPFKinectTest
         public byte[] buffer = new byte[BufferSize];
         // Received data string.
         public StringBuilder sb = new StringBuilder();
+
+        public ManualResetEvent isReadyEvent = new ManualResetEvent(true);
     }
 
 
@@ -80,7 +83,7 @@ namespace WPFKinectTest
 
         BackgroundWorker bw = new BackgroundWorker();
 
-        List<Socket> listeners = new List<Socket>();
+        List<StateObject> listeners = new List<StateObject>();
 
         public Window1()
         {
@@ -125,6 +128,7 @@ namespace WPFKinectTest
 
                 while (true)
                 {
+                    Console.WriteLine("Loop entry");
                     // Set the event to nonsignaled state.
                     allDone.Reset();
 
@@ -134,12 +138,14 @@ namespace WPFKinectTest
 
                     // Wait until a connection is made before continuing.
                     allDone.WaitOne();
+
+                    Console.WriteLine("Got connection");
                 }
 
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.ToString());
+                Console.WriteLine("xxx " + e.ToString());
             }
         }
 
@@ -152,10 +158,11 @@ namespace WPFKinectTest
             Socket listener = (Socket) ar.AsyncState;
             Socket handler = listener.EndAccept(ar);
 
-            listeners.Add(handler);
-
             // Create the state object.
             StateObject state = new StateObject();
+
+            listeners.Add(state);
+
             state.workSocket = handler;
             handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
             //handler.BeginDisconnect(false, new AsyncCallback(DisconnectCallback), state);
@@ -254,22 +261,36 @@ namespace WPFKinectTest
                     //Console.WriteLine(this.actualDepthFrame[19]);
                     //Console.WriteLine(String.Join(":", this.actualDepthFrame).Length);
                     var testValue = this.actualDepthFrame[19].ToString();
-                    var toRemove = new List<Socket>();
-                    foreach (Socket listener in listeners)
+                    var toRemove = new List<StateObject>();
+                    foreach (StateObject listener in listeners)
                     {
-                        byte[] bytes = Encoding.Default.GetBytes(testValue + "\n");
-                        try {
+                        var oSerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+                        string sJSON = oSerializer.Serialize(this.actualDepthFrame);
 
-                        if (IsConnected(listener))
-                        {
-                            listener.Send(bytes);
-                        }
+                        byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
+                        Socket socket = listener.workSocket;
+                        try {
+                            if (IsConnected(socket))
+                            {
+                                // socket.Send(bytes);
+                                Console.WriteLine("waiting for listener to receive possible earlier sends");
+                                listener.isReadyEvent.WaitOne();
+                                Console.WriteLine("listener is now free");
+                                try
+                                {
+                                    socket.BeginSend(bytes, 0, bytes.Length, SocketFlags.None, EndSend, listener);
+                                }
+                                catch
+                                {
+                                    Console.WriteLine("fail fail fail");
+                                }
+                            }
                         } catch (ObjectDisposedException) {
                             Console.WriteLine("disconnected");
                             toRemove.Add(listener);
                         }
                     }
-                    foreach (Socket listener in toRemove)
+                    foreach (StateObject listener in toRemove)
                     {
                         listeners.Remove(listener);
                     }
@@ -291,6 +312,22 @@ namespace WPFKinectTest
             }
         }
 
+
+        private void EndSend(IAsyncResult ar)
+        {
+            try
+            {
+                StateObject state = (StateObject)ar.AsyncState;
+                state.workSocket.EndSend(ar);
+                Console.WriteLine("setting listener free");
+                state.isReadyEvent.Set();
+            }
+            catch (SocketException e)
+            {
+                Console.WriteLine("yy " + e.ToString());
+            }
+            Console.WriteLine("yy Okay");
+        }
 
         private void ConvertDepthFrame2(short[] depthFrame)
         {
