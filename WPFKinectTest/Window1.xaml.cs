@@ -1,22 +1,5 @@
 ﻿///----------------------------------------------------------
-///Kinect Depth Example
-///Date: February 12th, 2012
-///--------------------
-///Authors:
-/// - Jesus Dominguez:
-/// 
-/// - Angel Hernandez:
-///     @mifulapirus
-///     www.tupperbot.com
-///-----------------------
-///All code is based on the Kinect Explorer Example. 
-///-----------------------------------------------------------------------------------------------
-///Summary:
-///This is just a simplification of the Explorer Example code that comes
-///with the final version of the Kinect SDK released by Microsoft in February.
-///This example shows the minimum code required to get the depth image drawn in a WPF program.
-///It is for sure not a perfect and super safe code, but it is just intended to show how to do 
-///this in a simple way.
+/// Adapted from http://www.tupperbot.com/?p=133
 ///-----------------------------------------------------------------------------------------------
 using System;
 using System.Collections.Generic;
@@ -35,22 +18,9 @@ using System.ComponentModel;
 using System.Web.Script.Serialization;
 using System.Collections.Concurrent;
 
-namespace WPFKinectTest
-{
-    // State object for reading client data asynchronously
-    public class StateObject
-    {
-        // Client  socket.
-        public Socket workSocket = null;
-        // Size of receive buffer.
-        public const int BufferSize = 1024;
-        // Receive buffer.
-        public byte[] buffer = new byte[BufferSize];
-        // Received data string.
-        public StringBuilder sb = new StringBuilder();
 
-        public ManualResetEvent isReadyEvent = new ManualResetEvent(true);
-    }
+namespace KinectStreamer
+{
 
 
     /// <summary>
@@ -62,40 +32,33 @@ namespace WPFKinectTest
         private short[] pixelData;
         private byte[] depthFrame32;
         private int[] actualDepthFrame;
-        
+
         //The bitmap that will contain the actual converted depth into an image
         private WriteableBitmap outputBitmap;
         private static readonly int Bgr32BytesPerPixel = (PixelFormats.Bgr32.BitsPerPixel + 7) / 8;
-        
+
         //Format of the last Depth Image. 
         //This changes when you first run the program or whenever you minimize the window 
         private DepthImageFormat lastImageFormat;
-        
+
         //Identify each color layer on the R G B
         private const int RedIndex = 2;
         private const int GreenIndex = 1;
         private const int BlueIndex = 0;
-        
+
         //Declare our Kinect Sensor!
         KinectSensor kinectSensor;
 
-        
-        private ManualResetEvent allDone = new ManualResetEvent(false);
-
-        BackgroundWorker bw = new BackgroundWorker();
-
-        List<StateObject> listeners = new List<StateObject>();
-
-        ConcurrentQueue<StateObject> newListeners = new ConcurrentQueue<StateObject>();
+        PortStreamer portStreamer = new PortStreamer(1111, 100);
 
         public Window1()
         {
             InitializeComponent();
 
             //Select the first kinect found
-            kinectSensor = KinectSensor.KinectSensors[0];   
+            kinectSensor = KinectSensor.KinectSensors[0];
             //Set up the depth stream to be the largest possible
-            kinectSensor.DepthStream.Enable(DepthImageFormat.Resolution640x480Fps30);  
+            kinectSensor.DepthStream.Enable(DepthImageFormat.Resolution640x480Fps30);
             //Initialize the Kinect Sensor
             kinectSensor.Start();
             //Subscribe to an event that will be triggered every time a new frame is ready
@@ -103,117 +66,11 @@ namespace WPFKinectTest
             //Read the elevation value of the Kinect and assign it to the slider so it doesn't look weird when the program starts 
             slider1.Value = kinectSensor.ElevationAngle;
 
-            try
-            {
 
-                bw.DoWork += new DoWorkEventHandler(bw_DoWork);
-                bw.RunWorkerAsync();
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("toplevel exception");
-            }
-            
-
+            portStreamer.runAsyncForever();
         }
 
-        private void bw_DoWork(object sender, DoWorkEventArgs e)
-        {
-            try
-            {
-
-                StartListening();
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("toplevel exception 2");
-            }
-            
-        }
-
-        public void StartListening()
-        {
-            // Data buffer for incoming data.
-            byte[] bytes = new Byte[1024];
-
-            IPEndPoint localEndPoint = new IPEndPoint(IPAddress.Any, 1111);
-
-            Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-            try
-            {
-                listener.Bind(localEndPoint);
-                listener.Listen(100);
-
-                while (true)
-                {
-                    Console.WriteLine("Loop entry");
-                    // Set the event to nonsignaled state.
-                    allDone.Reset();
-
-                    // Start an asynchronous socket to listen for connections.
-                    Console.WriteLine("Waiting for a connection...");
-                    listener.BeginAccept(new AsyncCallback(AcceptCallback), listener);
-
-                    // Wait until a connection is made before continuing.
-                    allDone.WaitOne();
-
-                    Console.WriteLine("Got connection");
-                }
-
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("xxx " + e.ToString());
-            }
-        }
-
-        public void AcceptCallback(IAsyncResult ar)
-        {
-            // Signal the main thread to continue.
-            allDone.Set();
-
-            // Get the socket that handles the client request.
-            Socket listener = (Socket) ar.AsyncState;
-            Socket handler = listener.EndAccept(ar);
-
-            // Create the state object.
-            StateObject state = new StateObject();
-
-            newListeners.Enqueue(state);
-
-            state.workSocket = handler;
-            //handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-            //handler.BeginDisconnect(false, new AsyncCallback(DisconnectCallback), state);
-        }
-
-        public static void DisconnectCallback(IAsyncResult ar)
-        {
-            StateObject state = (StateObject)ar.AsyncState;
-            Socket handler = state.workSocket;
-
-            Console.WriteLine("disconnect from " + handler + " : " + state);
-
-            handler.EndDisconnect(ar);
-        }
-
-
-        public static bool IsConnected(Socket socket)
-        {
-            try
-            {
-                return !(socket.Poll(1, SelectMode.SelectRead) && socket.Available == 0);
-            }
-            catch (SocketException) {
-                Console.WriteLine("SocketException in IsConnected");
-                return false;
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("other Exception in IsConnected");
-                return false;
-            }
-        }
+       
 
         /// <summary>
         /// DepthImageReady:
@@ -223,7 +80,7 @@ namespace WPFKinectTest
         {
             using (DepthImageFrame imageFrame = e.OpenDepthImageFrame())
             {
-            	//We expect this to be always true since we are coming from a triggered event
+                //We expect this to be always true since we are coming from a triggered event
                 if (imageFrame != null)
                 {
                     //Check if the format of the image has changed.
@@ -236,7 +93,7 @@ namespace WPFKinectTest
                         this.pixelData = new short[imageFrame.PixelDataLength];
                         this.depthFrame32 = new byte[imageFrame.Width * imageFrame.Height * Bgr32BytesPerPixel];
                         this.actualDepthFrame = new int[imageFrame.Width * imageFrame.Height];
-                        
+
                         //Create the new Bitmap
                         this.outputBitmap = new WriteableBitmap(
                            imageFrame.Width,
@@ -261,50 +118,16 @@ namespace WPFKinectTest
                     //Console.WriteLine(this.actualDepthFrame[19]);
                     //Console.WriteLine(String.Join(":", this.actualDepthFrame).Length);
                     var testValue = this.actualDepthFrame[19].ToString();
-                    var toRemove = new List<StateObject>();
-                    Console.WriteLine("having " + listeners.Count);
-                    foreach (StateObject listener in listeners)
-                    {
-                        var oSerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
-                        //string sJSON = oSerializer.Serialize(this.actualDepthFrame);
-                        string sJSON = string.Join(",", this.actualDepthFrame);
+                    
+                   
 
-                        byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
-                        Socket socket = listener.workSocket;
-                        try {
-                                Console.WriteLine("waiting for listener to receive possible earlier sends");
-                                listener.isReadyEvent.WaitOne();
-                                Console.WriteLine("listener is now free");
-                                try
-                                {
-                                    socket.BeginSend(bytes, 0, bytes.Length, SocketFlags.None, EndSend, listener);
-                                }
-                                catch (SocketException ex)
-                                {
-                                    
-                                    Console.WriteLine("fail fail fail");
-                                    toRemove.Add(listener);
-                                    Console.WriteLine("fail here " + ex.ToString());
-                                }
-                                Thread.Sleep(1000);
-                        } catch (ObjectDisposedException) {
-                            Console.WriteLine("disconnected");
-                            toRemove.Add(listener);
-                        }
-                    }
-                    Console.WriteLine("Removing " + toRemove.Count);
-                    foreach (StateObject listener in toRemove)
-                    {
-                        listeners.Remove(listener);
-                    }
-                    Console.WriteLine("now having " + listeners.Count);
-                    {
-                        StateObject listenerToAdd;
-                        while (newListeners.TryDequeue(out listenerToAdd))
-                        {
-                            listeners.Add(listenerToAdd);
-                        }
-                    }
+                    var oSerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+                    //string sJSON = oSerializer.Serialize(this.actualDepthFrame);
+                    string sJSON = string.Join(",", this.actualDepthFrame);
+
+                    portStreamer.send(sJSON + "\n");
+                    //Thread.Sleep(1000);
+                   
 
                     ////Copy the RGB matrix to the bitmap to make it visible
                     //this.outputBitmap.WritePixels(
@@ -323,21 +146,7 @@ namespace WPFKinectTest
         }
 
 
-        private void EndSend(IAsyncResult ar)
-        {
-            try
-            {
-                StateObject state = (StateObject)ar.AsyncState;
-                state.workSocket.EndSend(ar);
-                Console.WriteLine("setting listener free");
-                state.isReadyEvent.Set();
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("yy " + e.ToString());
-            }
-            Console.WriteLine("yy Okay");
-        }
+
 
         private void ConvertDepthFrame2(short[] depthFrame)
         {
@@ -370,7 +179,7 @@ namespace WPFKinectTest
                 //Lets create a byte variable called Distance. 
                 //We will assign this variable a number that will come from the conversion of those 13 bits.
                 byte Distance = 0;
-                
+
                 //XBox Kinects (default) are limited between 800mm and 4096mm.
                 int MinimumDistance = 800;
                 int MaximumDistance = 4096;
@@ -387,8 +196,8 @@ namespace WPFKinectTest
 
                     //White = Close
                     //Black = Far
-                    Distance = (byte)(255-((realDepth - MinimumDistance) * 255 / (MaximumDistance - MinimumDistance)));
-                    
+                    Distance = (byte)(255 - ((realDepth - MinimumDistance) * 255 / (MaximumDistance - MinimumDistance)));
+
                     //Use the distance to paint each layer (R G & B) of the current pixel.
                     //Painting R, G and B with the same color will make it go from black to gray
                     this.depthFrame32[i32 + RedIndex] = (byte)(Distance);
@@ -419,5 +228,5 @@ namespace WPFKinectTest
             kinectSensor.ElevationAngle = (int)slider1.Value;
         }
 
-   }
+    }
 }
