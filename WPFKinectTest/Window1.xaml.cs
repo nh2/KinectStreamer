@@ -33,6 +33,7 @@ using System.Text;
 using System.Threading;
 using System.ComponentModel;
 using System.Web.Script.Serialization;
+using System.Collections.Concurrent;
 
 namespace WPFKinectTest
 {
@@ -85,6 +86,8 @@ namespace WPFKinectTest
 
         List<StateObject> listeners = new List<StateObject>();
 
+        ConcurrentQueue<StateObject> newListeners = new ConcurrentQueue<StateObject>();
+
         public Window1()
         {
             InitializeComponent();
@@ -100,16 +103,32 @@ namespace WPFKinectTest
             //Read the elevation value of the Kinect and assign it to the slider so it doesn't look weird when the program starts 
             slider1.Value = kinectSensor.ElevationAngle;
 
-            bw.DoWork += new DoWorkEventHandler(bw_DoWork);
-            bw.RunWorkerAsync();
+            try
+            {
 
+                bw.DoWork += new DoWorkEventHandler(bw_DoWork);
+                bw.RunWorkerAsync();
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("toplevel exception");
+            }
             
 
         }
 
         private void bw_DoWork(object sender, DoWorkEventArgs e)
         {
-            StartListening();
+            try
+            {
+
+                StartListening();
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("toplevel exception 2");
+            }
+            
         }
 
         public void StartListening()
@@ -161,10 +180,10 @@ namespace WPFKinectTest
             // Create the state object.
             StateObject state = new StateObject();
 
-            listeners.Add(state);
+            newListeners.Enqueue(state);
 
             state.workSocket = handler;
-            handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
+            //handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
             //handler.BeginDisconnect(false, new AsyncCallback(DisconnectCallback), state);
         }
 
@@ -178,33 +197,6 @@ namespace WPFKinectTest
             handler.EndDisconnect(ar);
         }
 
-        public static void ReadCallback(IAsyncResult ar)
-        {
-            StateObject state = (StateObject)ar.AsyncState;
-            Socket handler = state.workSocket;
-
-
-
-            // Read data from the client socket.
-            int read = handler.EndReceive(ar);
-
-            // Data was read from the client socket.
-            if (read > 0)
-            {
-                state.sb.Append(Encoding.ASCII.GetString(state.buffer, 0, read));
-                handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-            }
-            else
-            {
-                if (state.sb.Length > 1)
-                {
-                    // All the data has been read from the client.
-                    string content = state.sb.ToString();
-                    Console.WriteLine("Read {0} bytes from socket.\n Data : {1}", content.Length, content);
-                }
-                handler.Close();
-            }
-        }
 
         public static bool IsConnected(Socket socket)
         {
@@ -212,7 +204,15 @@ namespace WPFKinectTest
             {
                 return !(socket.Poll(1, SelectMode.SelectRead) && socket.Available == 0);
             }
-            catch (SocketException) { return false; }
+            catch (SocketException) {
+                Console.WriteLine("SocketException in IsConnected");
+                return false;
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("other Exception in IsConnected");
+                return false;
+            }
         }
 
         /// <summary>
@@ -262,17 +262,16 @@ namespace WPFKinectTest
                     //Console.WriteLine(String.Join(":", this.actualDepthFrame).Length);
                     var testValue = this.actualDepthFrame[19].ToString();
                     var toRemove = new List<StateObject>();
+                    Console.WriteLine("having " + listeners.Count);
                     foreach (StateObject listener in listeners)
                     {
                         var oSerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
-                        string sJSON = oSerializer.Serialize(this.actualDepthFrame);
+                        //string sJSON = oSerializer.Serialize(this.actualDepthFrame);
+                        string sJSON = string.Join(",", this.actualDepthFrame);
 
                         byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
                         Socket socket = listener.workSocket;
                         try {
-                            if (IsConnected(socket))
-                            {
-                                // socket.Send(bytes);
                                 Console.WriteLine("waiting for listener to receive possible earlier sends");
                                 listener.isReadyEvent.WaitOne();
                                 Console.WriteLine("listener is now free");
@@ -280,21 +279,32 @@ namespace WPFKinectTest
                                 {
                                     socket.BeginSend(bytes, 0, bytes.Length, SocketFlags.None, EndSend, listener);
                                 }
-                                catch
+                                catch (SocketException ex)
                                 {
+                                    
                                     Console.WriteLine("fail fail fail");
+                                    toRemove.Add(listener);
+                                    Console.WriteLine("fail here " + ex.ToString());
                                 }
-                            }
+                                Thread.Sleep(1000);
                         } catch (ObjectDisposedException) {
                             Console.WriteLine("disconnected");
                             toRemove.Add(listener);
                         }
                     }
+                    Console.WriteLine("Removing " + toRemove.Count);
                     foreach (StateObject listener in toRemove)
                     {
                         listeners.Remove(listener);
                     }
-
+                    Console.WriteLine("now having " + listeners.Count);
+                    {
+                        StateObject listenerToAdd;
+                        while (newListeners.TryDequeue(out listenerToAdd))
+                        {
+                            listeners.Add(listenerToAdd);
+                        }
+                    }
 
                     ////Copy the RGB matrix to the bitmap to make it visible
                     //this.outputBitmap.WritePixels(
@@ -322,7 +332,7 @@ namespace WPFKinectTest
                 Console.WriteLine("setting listener free");
                 state.isReadyEvent.Set();
             }
-            catch (SocketException e)
+            catch (Exception e)
             {
                 Console.WriteLine("yy " + e.ToString());
             }
