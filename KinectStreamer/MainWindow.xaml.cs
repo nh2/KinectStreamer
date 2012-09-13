@@ -17,16 +17,16 @@ using System.Threading;
 using System.ComponentModel;
 using System.Web.Script.Serialization;
 using System.Collections.Concurrent;
-
+using Vicarious;
 
 namespace KinectStreamer
 {
 
 
     /// <summary>
-    /// Interaction logic for Window1.xaml
+    /// Interaction logic for MainWindow.xaml
     /// </summary>
-    public partial class Window1 : Window
+    public partial class MainWindow : Window
     {
         //Declare some global variables
         private short[] pixelData;
@@ -49,9 +49,9 @@ namespace KinectStreamer
         //Declare our Kinect Sensor!
         KinectSensor kinectSensor;
 
-        PortStreamer portStreamer = new PortStreamer(1111, 100);
-
-        public Window1()
+        PortStreamer portStreamer = new PortStreamer(100);
+        
+        public MainWindow()
         {
             InitializeComponent();
 
@@ -64,7 +64,7 @@ namespace KinectStreamer
             //Subscribe to an event that will be triggered every time a new frame is ready
             kinectSensor.DepthFrameReady += new EventHandler<DepthImageFrameReadyEventArgs>(DepthImageReady);
             //Read the elevation value of the Kinect and assign it to the slider so it doesn't look weird when the program starts 
-            slider1.Value = kinectSensor.ElevationAngle;
+            //slider1.Value = kinectSensor.ElevationAngle;
 
 
             portStreamer.runAsyncForever();
@@ -103,7 +103,7 @@ namespace KinectStreamer
                            PixelFormats.Bgr32,
                            null);
 
-                        this.kinectDepthImage.Source = this.outputBitmap;
+                        //this.kinectDepthImage.Source = this.outputBitmap;
                     }
 
                     //Copy the stream to its short version
@@ -125,8 +125,10 @@ namespace KinectStreamer
                     //string sJSON = oSerializer.Serialize(this.actualDepthFrame);
                     string sJSON = string.Join(",", this.actualDepthFrame);
 
-                    portStreamer.send(sJSON + "\n");
-                    //Thread.Sleep(1000);
+                    byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
+
+                    portStreamer.send(bytes);
+
                    
 
                     ////Copy the RGB matrix to the bitmap to make it visible
@@ -219,14 +221,14 @@ namespace KinectStreamer
 
         //If you move the wheel of your mouse after the slider got the focus, you will move the motor of the kinect.
         //We have to be very careful doing this since the kinect might get unresponsive if we send this command too fast.
-        private void slider1_MouseWheel(object sender, MouseWheelEventArgs e)
-        {
-            //Calculate the new value based on the wheel movement
-            if (e.Delta > 0) { slider1.Value = slider1.Value + 5; }
-            else { slider1.Value = slider1.Value - 5; }
-            //Send the new elevation value to our Kinect
-            kinectSensor.ElevationAngle = (int)slider1.Value;
-        }
+        //private void slider1_MouseWheel(object sender, MouseWheelEventArgs e)
+        //{
+        //    //Calculate the new value based on the wheel movement
+        //    if (e.Delta > 0) { slider1.Value = slider1.Value + 5; }
+        //    else { slider1.Value = slider1.Value - 5; }
+        //    //Send the new elevation value to our Kinect
+        //    kinectSensor.ElevationAngle = (int)slider1.Value;
+        //}
 
     }
 }
