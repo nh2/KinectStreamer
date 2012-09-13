@@ -17,7 +17,6 @@ using System.Threading;
 using System.ComponentModel;
 using System.Web.Script.Serialization;
 using System.Collections.Concurrent;
-using Vicarious;
 
 namespace KinectStreamer
 {
@@ -49,7 +48,7 @@ namespace KinectStreamer
         //Declare our Kinect Sensor!
         KinectSensor kinectSensor;
 
-        PortStreamer portStreamer = new PortStreamer(100);
+        PortStreamer portStreamer = new PortStreamer(1111, 100);
         
         public MainWindow()
         {
