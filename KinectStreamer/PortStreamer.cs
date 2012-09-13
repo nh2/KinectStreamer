@@ -21,7 +21,7 @@ namespace KinectStreamer
         // "1-semaphore". For sending data to the client.
         // Prevents us from sending more while the client is still receiving.
         // Signalled when the client is ready to receive again.
-        public readonly ManualResetEvent readyToReceiveEvent = new ManualResetEvent(true);
+        public readonly AutoResetEvent readyToReceiveEvent = new AutoResetEvent(true);
 
         public ClientConnectionState(Socket socket)
         {
@@ -29,7 +29,19 @@ namespace KinectStreamer
         }
     }
 
-
+    /* Starts a TCP server on a given port.
+     * Send() sends messages to all connected clients.
+     * Uses asynchronous socket operations.
+     *
+     * If a client cannot receive messages as fast as you send them, messages to that client
+     * are dropped until it is ready to receive again.
+     *
+     * Handles disconnects and forceful shutdowns gracefully (the corresponding client is
+     * disconnected).
+     *
+     * Use RunBackground() to start the server in a background thread or Run()
+     * if you with to control the thread it is executing in yourself.
+     */
     class PortStreamer
     {
         private int backlog;
@@ -37,7 +49,7 @@ namespace KinectStreamer
         private int port;
 
         // "1-semaphore" for accepting new clients.
-        private ManualResetEvent acceptEvent = new ManualResetEvent(false);
+        private AutoResetEvent acceptEvent = new AutoResetEvent(true);
 
         // All clients we are currently sending data to.
         List<ClientConnectionState> clients = new List<ClientConnectionState>();
@@ -59,7 +71,7 @@ namespace KinectStreamer
         {
         }
 
-        private void log(string msg)
+        private void Log(string msg)
         {
             // This could forward to a proper logging framework.
             Console.WriteLine("PortStreamer: " + msg);
@@ -67,10 +79,19 @@ namespace KinectStreamer
 
         private void bw_DoWork(object sender, DoWorkEventArgs e)
         {
-            StartListening();
+            Run();
         }
 
-        public void StartListening()
+        /* Like Run(), but forks off to a background thread. Does not block. */
+        public void RunBackground()
+        {
+            BackgroundWorker bw = new BackgroundWorker();
+            bw.DoWork += new DoWorkEventHandler(bw_DoWork);
+            bw.RunWorkerAsync();
+        }
+
+        /* Runs the PortStreamer in the current thread. Blocks forever. */
+        public void Run()
         {
             IPEndPoint localEndPoint = new IPEndPoint(host, port);
 
@@ -82,14 +103,13 @@ namespace KinectStreamer
             // Client accept loop.
             while (true)
             {
-                log("Waiting for a connection...");
+                Log("Waiting for a connection...");
 
                 // Listen for connections, but only accept one at a time synchronising on acceptEvent.
                 listener.BeginAccept(new AsyncCallback(AcceptDoneCallback), listener);
 
                 // Wait until a connection is made before continuing.
                 acceptEvent.WaitOne();
-                acceptEvent.Reset();
             }
         }
 
@@ -109,35 +129,27 @@ namespace KinectStreamer
                 // Create the state object.
                 ClientConnectionState client = new ClientConnectionState(clientSocket);
 
-                log("Got new connection from " + client.socket.RemoteEndPoint);
+                Log("Got new connection from " + client.socket.RemoteEndPoint);
 
                 // Add client to the threadsafe list of clients signing up for getting data.
                 newClients.Enqueue(client);
             }
             catch (SocketException e)
             {
-                log("exception accepting a client: " + e.ToString());
+                Log("exception accepting a client: " + e.ToString());
             }
-        }
-
-        /* Like StartListening(), but forks off to the background. */
-        public void runAsyncForever()
-        {
-            BackgroundWorker bw = new BackgroundWorker();
-            bw.DoWork += new DoWorkEventHandler(bw_DoWork);
-            bw.RunWorkerAsync();
         }
 
         // Sends the given string do all connected clients, encoding it to bytes with default encoding.
         // Does not append a newline.
         // See send(byte[] bytes) for details.
-        public void send(string data)
+        public void Send(string data)
         {
-            send(Encoding.Default.GetBytes(data));
+            Send(Encoding.Default.GetBytes(data));
         }
 
         // Sends the given bytes to all connected clients.
-        public void send(byte[] bytes)
+        public void Send(byte[] bytes)
         {
             // Assemble disconnected clients here as we cannot remove them while we iterate over them.
             var toRemove = new List<ClientConnectionState>();
@@ -149,19 +161,22 @@ namespace KinectStreamer
             {
                 Socket socket = client.socket;
 
-                // Wait until the client is ready to receive.
-                // TODO This currently blocks all other clients, change it to skipping the client instead.
-                client.readyToReceiveEvent.WaitOne();
+                // If the client is not ready to receive, skip this message and continue with the other clients.
+                // WaitOne(0) to check the current state, from http://stackoverflow.com/a/389226
+                bool clientReady = client.readyToReceiveEvent.WaitOne(0);
 
-                // Send the data. The client might have disconnected already.
-                try
+                if (clientReady)
                 {
-                    socket.BeginSend(bytes, 0, bytes.Length, SocketFlags.None, SendDoneCallback, client);
-                }
-                catch (SocketException)
-                {
-                    log("Send failed during socket.BeginSend: Client " + client.socket.RemoteEndPoint + " might have disconnected"); log("Send failed: Client " + client.socket.RemoteEndPoint + " might have disconnected. Removing client.");
-                    toRemove.Add(client);
+                    // Send the data. The client might have disconnected already.
+                    try
+                    {
+                        socket.BeginSend(bytes, 0, bytes.Length, SocketFlags.None, SendDoneCallback, client);
+                    }
+                    catch (SocketException)
+                    {
+                        Log("Send failed during socket.BeginSend: Client " + client.socket.RemoteEndPoint + " might have disconnected. Removing client.");
+                        toRemove.Add(client);
+                    }
                 }
             }
 
@@ -186,7 +201,7 @@ namespace KinectStreamer
 
             if (clientCountChanged)
             {
-                log("Current client count: " + clients.Count);
+                Log("Current client count: " + clients.Count);
             }
         }
 

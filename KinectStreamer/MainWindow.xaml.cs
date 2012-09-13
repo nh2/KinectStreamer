@@ -66,7 +66,7 @@ namespace KinectStreamer
             //slider1.Value = kinectSensor.ElevationAngle;
 
 
-            portStreamer.runAsyncForever();
+            portStreamer.RunBackground();
         }
 
        
@@ -126,7 +126,7 @@ namespace KinectStreamer
 
                     byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
 
-                    portStreamer.send(bytes);
+                    portStreamer.Send(bytes);
 
                    
 
