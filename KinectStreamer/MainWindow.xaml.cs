@@ -1,6 +1,6 @@
-﻿///----------------------------------------------------------
+﻿///
 /// Adapted from http://www.tupperbot.com/?p=133
-///-----------------------------------------------------------------------------------------------
+///
 using System;
 using System.Collections.Generic;
 using System.Windows;
@@ -17,20 +17,17 @@ using System.Threading;
 using System.ComponentModel;
 using System.Web.Script.Serialization;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace KinectStreamer
 {
-
-
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
+    /* Window visualizing the Kinect data we are streaming. */
     public partial class MainWindow : Window
     {
-        //Declare some global variables
+        // 
         private short[] pixelData;
-        private byte[] depthFrame32;
-        private int[] actualDepthFrame;
+        private byte[] colorArray;
+        private int[] depthArray;
 
         //The bitmap that will contain the actual converted depth into an image
         private WriteableBitmap outputBitmap;
@@ -49,97 +46,86 @@ namespace KinectStreamer
         KinectSensor kinectSensor;
 
         PortStreamer portStreamer = new PortStreamer(1111, 100);
-        
+
         public MainWindow()
         {
             InitializeComponent();
 
-            //Select the first kinect found
-            kinectSensor = KinectSensor.KinectSensors[0];
-            //Set up the depth stream to be the largest possible
-            kinectSensor.DepthStream.Enable(DepthImageFormat.Resolution640x480Fps30);
+            // Only use the first Kinect
+            // Subscribe to receiving depth data (highest resolution)
             //Initialize the Kinect Sensor
+            kinectSensor = KinectSensor.KinectSensors[0];
+            kinectSensor.DepthStream.Enable(DepthImageFormat.Resolution640x480Fps30);
             kinectSensor.Start();
-            //Subscribe to an event that will be triggered every time a new frame is ready
-            kinectSensor.DepthFrameReady += new EventHandler<DepthImageFrameReadyEventArgs>(DepthImageReady);
-            //Read the elevation value of the Kinect and assign it to the slider so it doesn't look weird when the program starts 
-            //slider1.Value = kinectSensor.ElevationAngle;
 
+            // Initialize GUI slider to the current Kinect angle
+            slider1.Value = kinectSensor.ElevationAngle;
 
-            portStreamer.RunBackground();
+            // Set up callbacks
+            kinectSensor.DepthFrameReady += new EventHandler<DepthImageFrameReadyEventArgs>(DepthImageReadyCallback);
+
+            // TODO re-enable
+            //portStreamer.RunBackground();
         }
 
-       
-
-        /// <summary>
-        /// DepthImageReady:
-        /// This function will be called every time a new depth frame is ready
-        /// </summary>
-        private void DepthImageReady(object sender, DepthImageFrameReadyEventArgs e)
+        /* Called when a depth image has been received from the Kinect. */
+        private void DepthImageReadyCallback(object sender, DepthImageFrameReadyEventArgs e)
         {
             using (DepthImageFrame imageFrame = e.OpenDepthImageFrame())
             {
-                //We expect this to be always true since we are coming from a triggered event
-                if (imageFrame != null)
+                // We subscribed to depth events
+                Debug.Assert(imageFrame != null);
+
+                //Check if the format of the image has changed.
+                //This always happens when you run the program for the first time and every time you minimize the window
+                bool NewFormat = this.lastImageFormat != imageFrame.Format;
+
+                if (NewFormat)
                 {
-                    //Check if the format of the image has changed.
-                    //This always happens when you run the program for the first time and every time you minimize the window
-                    bool NewFormat = this.lastImageFormat != imageFrame.Format;
+                    //Update the image to the new format
+                    this.pixelData = new short[imageFrame.PixelDataLength];
 
-                    if (NewFormat)
-                    {
-                        //Update the image to the new format
-                        this.pixelData = new short[imageFrame.PixelDataLength];
-                        this.depthFrame32 = new byte[imageFrame.Width * imageFrame.Height * Bgr32BytesPerPixel];
-                        this.actualDepthFrame = new int[imageFrame.Width * imageFrame.Height];
+                    this.colorArray = new byte[imageFrame.Width * imageFrame.Height * Bgr32BytesPerPixel];
+                    this.depthArray = new int[imageFrame.Width * imageFrame.Height];
 
-                        //Create the new Bitmap
-                        this.outputBitmap = new WriteableBitmap(
-                           imageFrame.Width,
-                           imageFrame.Height,
-                           96,  // DpiX
-                           96,  // DpiY
-                           PixelFormats.Bgr32,
-                           null);
-
-                        //this.kinectDepthImage.Source = this.outputBitmap;
-                    }
-
-                    //Copy the stream to its short version
-                    imageFrame.CopyPixelDataTo(this.pixelData);
-
-
-                    //Convert the pixel data into its RGB Version.
-                    //Here is where the magic happens
-                    this.ConvertDepthFrame2(this.pixelData);
-
-
-                    //Console.WriteLine(this.actualDepthFrame[19]);
-                    //Console.WriteLine(String.Join(":", this.actualDepthFrame).Length);
-                    var testValue = this.actualDepthFrame[19].ToString();
-                    
-                   
-
-                    var oSerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
-                    //string sJSON = oSerializer.Serialize(this.actualDepthFrame);
-                    string sJSON = string.Join(",", this.actualDepthFrame);
-
-                    byte[] bytes = Encoding.Default.GetBytes(sJSON + "\n");
-
-                    portStreamer.Send(bytes);
-
-                   
-
-                    ////Copy the RGB matrix to the bitmap to make it visible
-                    //this.outputBitmap.WritePixels(
-                    //    new Int32Rect(0, 0, imageFrame.Width, imageFrame.Height), 
-                    //    convertedDepthBits,
-                    //    imageFrame.Width * Bgr32BytesPerPixel,
-                    //    0);
-
-                    // Update the Format
-                    this.lastImageFormat = imageFrame.Format;
+                    // Create the new Bitmap and connect it to the Image
+                    this.outputBitmap = new WriteableBitmap(imageFrame.Width, imageFrame.Height, 96, 96, PixelFormats.Bgr32, null);
+                    this.kinectDepthImage.Source = this.outputBitmap;
                 }
+
+                //Copy the stream to its short version
+                imageFrame.CopyPixelDataTo(this.pixelData);
+
+
+                //Convert the pixel data into its RGB Version.
+                //Here is where the magic happens
+                this.UpdateDepthArray(this.pixelData);
+
+
+                // TODO run this expensive stuff in a background thread
+                //string sJSON = string.Join(",", this.depthArray);
+
+                //portStreamer.Send(sJSON + "\n");
+
+                // Gives important informatin like min/max depth.
+                DepthImageStream depthStream = ((KinectSensor)sender).DepthStream;
+
+                //ConvertDepthFrameXX(this.pixelData, depthStream);
+
+                this.UpdateColorArray(depthStream);
+
+                //Console.WriteLine(string.Join(",", this.colorArray));
+
+                // Draw the color array to the image.
+                this.outputBitmap.WritePixels(
+                    new Int32Rect(0, 0, imageFrame.Width, imageFrame.Height),
+                    this.colorArray,
+                    imageFrame.Width * Bgr32BytesPerPixel,
+                    0);
+
+                // Update the Format
+                this.lastImageFormat = imageFrame.Format;
+                
 
                 //Since we are coming from a triggered event, we are not expecting anything here, at least for this short tutorial.
                 else { }
@@ -149,85 +135,71 @@ namespace KinectStreamer
 
 
 
-        private void ConvertDepthFrame2(short[] depthFrame)
+        private void UpdateDepthArray(short[] depthFrame)
         {
-            for (int i16 = 0; i16 < depthFrame.Length; i16++)
+            for (int i = 0; i < depthFrame.Length; i++)
             {
-                // Lowest 3 bits are player info, we ignore that
-                int realDepth = depthFrame[i16] >> DepthImageFrame.PlayerIndexBitmaskWidth;
-                this.actualDepthFrame[i16] = realDepth;
+                // Lowest 3 bits are player info, we ignore that. The rest is the depth.
+                int realDepth = depthFrame[i] >> DepthImageFrame.PlayerIndexBitmaskWidth;
+                this.depthArray[i] = realDepth;
             }
         }
 
 
-
-        /// <summary>
-        /// ConvertDepthFrame:
-        /// Converts the depth frame into its RGB version taking out all the player information and leaving only the depth.
-        /// </summary>
-        private byte[] ConvertDepthFrame(short[] depthFrame, DepthImageStream depthStream)
+        private void UpdateColorArray(DepthImageStream depthImageStream)
         {
-            //Run through the depth frame making the correlation between the two arrays
-            for (int i16 = 0, i32 = 0; i16 < depthFrame.Length && i32 < this.depthFrame32.Length; i16++, i32 += 4)
+            // Kinects depth recognition is limited (e.g. 800mm to 4000mm).
+            // Take that into account for scaling the colors.
+            int minDist = depthImageStream.MinDepth;
+            int maxDist = depthImageStream.MaxDepth;
+
+            for (int i = 0, i8 = 0; i < depthArray.Length; i++, i8 += 4)
             {
-                //We don't care about player's information here, so we are just going to rule it out by shifting the value.
-                int realDepth = depthFrame[i16] >> DepthImageFrame.PlayerIndexBitmaskWidth;
+                int depth = depthArray[i];
 
-                this.actualDepthFrame[i16] = realDepth;
+                byte colorScaled8Bit;
 
-                //We are left with 13 bits of depth information that we need to convert into an 8 bit number for each pixel.
-                //There are hundreds of ways to do this. This is just the simplest one.
-                //Lets create a byte variable called Distance. 
-                //We will assign this variable a number that will come from the conversion of those 13 bits.
-                byte Distance = 0;
-
-                //XBox Kinects (default) are limited between 800mm and 4096mm.
-                int MinimumDistance = 800;
-                int MaximumDistance = 4096;
-
-                //XBox Kinects (default) are not reliable closer to 800mm, so let's take those useless measurements out.
-                //If the distance on this pixel is bigger than 800mm, we will paint it in its equivalent gray
-                if (realDepth > MinimumDistance)
+                // depth can even be -1!
+                if (depth < minDist)
                 {
-                    //Convert the realDepth into the 0 to 255 range for our actual distance.
-                    //Use only one of the following Distance assignments 
-                    //White = Far
-                    //Black = Close
-                    //Distance = (byte)(((realDepth - MinimumDistance) * 255 / (MaximumDistance-MinimumDistance)));
-
-                    //White = Close
-                    //Black = Far
-                    Distance = (byte)(255 - ((realDepth - MinimumDistance) * 255 / (MaximumDistance - MinimumDistance)));
-
-                    //Use the distance to paint each layer (R G & B) of the current pixel.
-                    //Painting R, G and B with the same color will make it go from black to gray
-                    this.depthFrame32[i32 + RedIndex] = (byte)(Distance);
-                    this.depthFrame32[i32 + GreenIndex] = (byte)(Distance);
-                    this.depthFrame32[i32 + BlueIndex] = (byte)(Distance);
+                    colorScaled8Bit = 0;
                 }
-
-                //If we are closer than 800mm, the just paint it red so we know this pixel is not giving a good value
+                else if (depth > maxDist)
+                {
+                    colorScaled8Bit = 255;
+                }
                 else
                 {
-                    this.depthFrame32[i32 + RedIndex] = 150;
-                    this.depthFrame32[i32 + GreenIndex] = 0;
-                    this.depthFrame32[i32 + BlueIndex] = 0;
+                    int range = maxDist - minDist;
+                    int whereInThatRange = depth - minDist;
+
+                    colorScaled8Bit = (byte)(255 * whereInThatRange / range);
                 }
+
+                // Set R, G, B to the color (gives us gray)
+                this.colorArray[i8 + RedIndex] = colorScaled8Bit;
+                this.colorArray[i8 + GreenIndex] = colorScaled8Bit;
+                this.colorArray[i8 + BlueIndex] = colorScaled8Bit;
             }
-            //Now that we are done painting the pixels, we can return the byte array to be painted
-            return this.depthFrame32;
         }
+
 
         //If you move the wheel of your mouse after the slider got the focus, you will move the motor of the kinect.
         //We have to be very careful doing this since the kinect might get unresponsive if we send this command too fast.
-        //private void slider1_MouseWheel(object sender, MouseWheelEventArgs e)
-        //{
-        //    //Calculate the new value based on the wheel movement
-        //    if (e.Delta > 0) { slider1.Value = slider1.Value + 5; }
-        //    else { slider1.Value = slider1.Value - 5; }
-        //    //Send the new elevation value to our Kinect
-        //    kinectSensor.ElevationAngle = (int)slider1.Value;
-        //}
+        private void slider1_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            //Calculate the new value based on the wheel movement
+            if (e.Delta > 0)
+            {
+                slider1.Value = slider1.Value + 5;
+            }
+            else
+            {
+                slider1.Value = slider1.Value - 5;
+            }
+            //Send the new elevation value to our Kinect
+            kinectSensor.ElevationAngle = (int)slider1.Value;
+        }
 
     }
 }
